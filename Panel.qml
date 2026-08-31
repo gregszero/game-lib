@@ -87,6 +87,9 @@ Panel {
     query = ""
     cursorActive = false
     resetCursor()
+    // Clearing an already-empty query fires no change signal, so the list
+    // would otherwise reopen wherever it was last scrolled to.
+    if (listView) listView.positionViewAtBeginning()
     // The index is cheap and mostly local; a stale panel is worse than a
     // 200ms refresh, so re-read whenever it is opened.
     library.refresh(false)
