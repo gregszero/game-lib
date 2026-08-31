@@ -70,6 +70,34 @@ one-off scraped games open in a normal tab so history and the back button work.
 ]
 ```
 
+## Requirements
+
+| Dependency | Needed for | Notes |
+|------------|-----------|-------|
+| Omarchy 4.x with `omarchy-shell` | The plugin itself | Declares `schemaVersion: 1`, kind `bar-widget` |
+| `python3` (3.8+) | The indexer | **Standard library only** — no pip packages, no virtualenv |
+| Steam | The Steam half | Optional. Without it the panel simply shows web games |
+| A browser | Launching web games | Uses whatever `xdg-settings` reports, via `omarchy-launch-webapp` |
+
+No other runtime dependencies, no build step, and nothing is compiled or
+downloaded at install time.
+
+### What it reads and writes
+
+It **reads** Steam's own caches under `~/.local/share/Steam` (or `~/.steam`),
+and your optional `~/.config/omarchy/extensions/game-lib.jsonc`. It never
+writes to either.
+
+The only thing it **writes** is its own cache at
+`~/.cache/omarchy-game-lib/`, which holds the itch.io response so the feed is
+not refetched more than once every six hours.
+
+It makes network requests to exactly three places: `itch.io` for that feed,
+Steam's CDN for box art on the handful of games with no locally cached
+artwork, and — only if you paste an API key into the settings —
+`api.steampowered.com`. Setting `itchLimit` to `0`, leaving the API key empty,
+and turning off `showCovers` makes it fully offline.
+
 ## Install
 
 ```bash
@@ -79,10 +107,27 @@ omarchy plugin add https://github.com/gregszero/game-lib.git --enable --yes
 Or from a local checkout:
 
 ```bash
-ln -s ~/Developer/game-lib ~/.config/omarchy/plugins/greg.game-lib
+ln -s ~/Developer/game-lib ~/.config/omarchy/plugins/io.github.gregszero.game-lib
 omarchy-shell shell rescanPlugins
-omarchy plugin enable greg.game-lib
+omarchy plugin enable io.github.gregszero.game-lib
 ```
+
+## Removal
+
+```bash
+omarchy plugin remove io.github.gregszero.game-lib --yes
+```
+
+That takes the widget out of your bar and deletes
+`~/.config/omarchy/plugins/io.github.gregszero.game-lib`. To remove every
+trace, also delete the cache — nothing else is left behind:
+
+```bash
+rm -rf ~/.cache/omarchy-game-lib
+```
+
+Your own web-game entries in `~/.config/omarchy/extensions/game-lib.jsonc` are
+yours and are left alone; delete that file too if you want it gone.
 
 ## Using it
 

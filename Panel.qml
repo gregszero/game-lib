@@ -9,7 +9,7 @@ import "Model.js" as Model
 
 Panel {
   id: panelRoot
-  moduleName: "greg.game-lib"
+  moduleName: "io.github.gregszero.game-lib"
   ipcTarget: "game-lib"
   manageIpc: false
 
