@@ -1,24 +1,12 @@
 # Game Lib — an Omarchy shell plugin
 
 One bar icon that opens your whole playable library: every Steam game you own,
-plus cloud-gaming services and browser games that open the same way Omarchy
-opens Hey or X.
+plus cloud-gaming services and browser games.
 
-```
-        ┌──────────────────────────────┐
-        │  Games        53 Steam · 38 web│
-        │  ┌────────────────────────┐   │
-        │  │ Search your library…   │   │
-        │  └────────────────────────┘   │
-        │  RECENTLY PLAYED              │
-        │ ▸ Mistfall Hunter   36h · today│
-        │   Counter-Strike 2  833h · 2d  │
-        │  STEAM LIBRARY  53            │
-        │   Arma 3      17h · not installed│
-        │  WEB GAMES  38                │
-        │   GeForce NOW   Cloud       󰖟 │
-        └──────────────────────────────┘
-```
+<img width="398" height="635" alt="image" src="https://github.com/user-attachments/assets/b58994ff-c1cc-469f-8044-79bd378c390a" />
+
+
+
 
 ## Why it needs no Steam account or API key
 
