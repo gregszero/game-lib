@@ -529,12 +529,17 @@ def normalize_web(entry, source):
     }
 
 
-ITCH_CELL = re.compile(r'<div data-game_id="(\d+)".*?(?=<div data-game_id="|\Z)', re.S)
-ITCH_TITLE = re.compile(r'class="title game_link"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
-ITCH_THUMB = re.compile(r'data-lazy_src="([^"]+)"')
-ITCH_AUTHOR = re.compile(r'class="game_author"><a[^>]*>(.*?)</a>', re.S)
-ITCH_GENRE = re.compile(r'class="game_genre">(.*?)</div>', re.S)
-ITCH_TEXT = re.compile(r'class="game_text">(.*?)</div>', re.S)
+ITCH_FEED = "https://itch.io/games/html5.xml"
+ITCH_PAGE = "https://itch.io/games/html5"
+
+ITCH_ITEM = re.compile(r"<item>(.*?)</item>", re.S)
+# Bracketed tags itch appends to the RSS title: "[Free] [Survival] [Windows]".
+ITCH_TAGS = re.compile(r"\[([^\]]+)\]")
+# Tokens in those brackets that describe price or platform, not genre.
+ITCH_NON_GENRE = {
+    "free", "paid", "windows", "macos", "linux", "android", "ios",
+    "html5", "web", "browser", "unity", "godot", "gamemaker",
+}
 
 
 def untag(value):
@@ -542,33 +547,108 @@ def untag(value):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", value or ""))).strip()
 
 
-def scrape_itch(limit, timeout):
-    """Parse itch.io's browser-playable grid.
+def _tag(block, name):
+    match = re.search(r"<%s>(.*?)</%s>" % (name, name), block, re.S)
+    if not match:
+        return ""
+    value = match.group(1)
+    cdata = re.match(r"\s*<!\[CDATA\[(.*?)\]\]>\s*$", value, re.S)
+    if cdata:
+        value = cdata.group(1)
+    return untag(value)
 
-    Scraping is inherently brittle, so every field is optional and a parse
-    that yields nothing is reported as an error rather than an empty library.
-    """
-    url = "https://itch.io/games/html5"
+
+def _author_from_url(url):
+    """itch hosts every project on the developer's own subdomain."""
+    match = re.match(r"https?://([^./]+)\.itch\.io/", url or "")
+    return match.group(1) if match else ""
+
+
+def _fetch(url, timeout):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        html = response.read().decode("utf8", "replace")
+        return response.read().decode("utf8", "replace")
 
+
+def itch_from_feed(limit, timeout):
+    """Preferred source: itch.io's RSS feed for browser-playable games.
+
+    A real feed with named fields, so it does not break every time itch
+    reshuffles a CSS class or an attribute order.
+    """
+    xml = _fetch(ITCH_FEED, timeout)
     games = []
-    for cell in ITCH_CELL.finditer(html):
-        block = cell.group(0)
-        title = ITCH_TITLE.search(block)
+    for match in ITCH_ITEM.finditer(xml):
+        block = match.group(1)
+        url = _tag(block, "link") or _tag(block, "guid")
+        name = _tag(block, "plainTitle")
+        if not name:
+            # Fall back to the decorated title, minus its bracketed tags.
+            name = ITCH_TAGS.sub("", _tag(block, "title")).strip()
+        if not url or not name:
+            continue
+        # itch builds the RSS title as "<plainTitle> [Free] [Genre] [Platform]".
+        # Parse tags only from the part after the name, or a game whose own
+        # title contains brackets reports its subtitle as its genre.
+        decorated = _tag(block, "title")
+        suffix = decorated[len(name):] if decorated.startswith(name) else decorated
+        genres = [
+            tag.strip() for tag in ITCH_TAGS.findall(suffix)
+            if tag.strip().lower() not in ITCH_NON_GENRE
+        ]
+        games.append({
+            "id": "itch-" + hashlib.sha1(url.encode()).hexdigest()[:10],
+            "name": name,
+            "url": url,
+            "thumb": _tag(block, "imageurl"),
+            "author": _author_from_url(url),
+            "category": genres[0] if genres else "",
+            "description": _tag(block, "description"),
+            "webapp": False,
+        })
+        if len(games) >= limit:
+            break
+    if not games:
+        raise ValueError("feed contained no games")
+    return games
+
+
+# Attribute-order-independent: itch has already moved data-game_id once, and
+# anchoring on the class rather than on position survives that.
+ITCH_CELL_SPLIT = re.compile(r'<div\b(?=[^>]*\bclass="[^"]*\bgame_cell\b)', re.S)
+ITCH_ID = re.compile(r'data-game_id="(\d+)"')
+ITCH_TITLE_TAG = re.compile(r'<a\b([^>]*\bclass="[^"]*\btitle\b[^"]*\bgame_link\b[^"]*"[^>]*)>(.*?)</a>', re.S)
+ITCH_HREF = re.compile(r'href="([^"]+)"')
+ITCH_THUMB = re.compile(r'data-lazy_src="([^"]+)"')
+ITCH_AUTHOR = re.compile(r'class="game_author"[^>]*>\s*<a[^>]*>(.*?)</a>', re.S)
+ITCH_GENRE = re.compile(r'class="game_genre"[^>]*>(.*?)</div>', re.S)
+ITCH_TEXT = re.compile(r'class="game_text"[^>]*>(.*?)</div>', re.S)
+
+
+def itch_from_html(limit, timeout):
+    """Fallback: parse the browse page if the feed is unavailable."""
+    page = _fetch(ITCH_PAGE, timeout)
+    games = []
+    for cell in ITCH_CELL_SPLIT.split(page)[1:]:
+        title = ITCH_TITLE_TAG.search(cell)
         if not title:
             continue
-        thumb = ITCH_THUMB.search(block)
-        author = ITCH_AUTHOR.search(block)
-        genre = ITCH_GENRE.search(block)
-        text = ITCH_TEXT.search(block)
+        href = ITCH_HREF.search(title.group(1))
+        if not href:
+            continue
+        url = html.unescape(href.group(1))
+        ident = ITCH_ID.search(cell)
+        thumb = ITCH_THUMB.search(cell)
+        author = ITCH_AUTHOR.search(cell)
+        genre = ITCH_GENRE.search(cell)
+        text = ITCH_TEXT.search(cell)
         games.append({
-            "id": "itch-%s" % cell.group(1),
+            "id": "itch-" + (ident.group(1) if ident
+                             else hashlib.sha1(url.encode()).hexdigest()[:10]),
             "name": untag(title.group(2)),
-            "url": title.group(1),
-            "thumb": thumb.group(1) if thumb else "",
-            "author": untag(author.group(1)) if author else "",
+            "url": url,
+            "thumb": html.unescape(thumb.group(1)) if thumb else "",
+            "author": untag(author.group(1)) if author else _author_from_url(url),
             "category": untag(genre.group(1)) if genre else "",
             "description": untag(text.group(1)) if text else "",
             "webapp": False,
@@ -576,8 +656,19 @@ def scrape_itch(limit, timeout):
         if len(games) >= limit:
             break
     if not games:
-        raise ValueError("itch.io markup returned no games")
+        raise ValueError("browse page markup returned no games")
     return games
+
+
+def fetch_itch(limit, timeout):
+    """Feed first, page second. Report both failures if neither works."""
+    problems = []
+    for source in (itch_from_feed, itch_from_html):
+        try:
+            return source(limit, timeout)
+        except (urllib.error.URLError, ValueError, OSError) as exc:
+            problems.append("%s: %s" % (source.__name__.replace("itch_from_", ""), exc))
+    raise ValueError("; ".join(problems))
 
 
 def cached_itch(limit, ttl, timeout, force):
@@ -595,7 +686,7 @@ def cached_itch(limit, ttl, timeout, force):
         return cached.get("games", [])[:limit], ""
 
     try:
-        games = scrape_itch(limit, timeout)
+        games = fetch_itch(limit, timeout)
     except (urllib.error.URLError, ValueError, OSError) as exc:
         if cached:
             return cached.get("games", [])[:limit], "itch.io refresh failed (showing cache): %s" % exc

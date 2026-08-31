@@ -116,7 +116,7 @@ Panel {
       Item {
         Text {
           anchors.centerIn: parent
-          text: ""
+          text: "󰊴"
           color: panelRoot.barIconColor
           font.family: panelRoot.fontFamily
           font.pixelSize: Style.font.icon
@@ -164,7 +164,7 @@ Panel {
           fontFamily: panelRoot.fontFamily
           iconComponent: Component {
             Text {
-              text: ""
+              text: "󰊴"
               color: panelRoot.foreground
               font.family: panelRoot.fontFamily
               font.pixelSize: Style.font.display

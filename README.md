@@ -49,8 +49,9 @@ Three sources, merged:
 1. **A curated catalogue** (`catalog.json`) — itch.io, Xbox Cloud, GeForce NOW,
    Amazon Luna, Poki, CrazyGames, Lichess, the Internet Archive arcade, and more.
 2. **Your own entries** in `~/.config/omarchy/extensions/game-library.jsonc`.
-3. **A cached scrape of itch.io's browser-playable listings**, refreshed at most
-   every six hours.
+3. **itch.io's browser-playable listings**, from their RSS feed, cached for six
+   hours. If the feed is ever unavailable the indexer falls back to parsing the
+   browse page, and to the last good cache after that.
 
 Curated launchers open as chromeless web apps via `omarchy-launch-webapp`;
 one-off scraped games open in a normal tab so history and the back button work.

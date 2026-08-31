@@ -96,13 +96,15 @@ function coverSource(entry, showCovers) {
   return entry.coverUrl || ""
 }
 
-// Nerd Font glyph used when there is no artwork to show.
+// Nerd Font glyph used when there is no artwork to show. These are all
+// supplementary-plane Material Design codepoints (U+F0000+), the set
+// Omarchy's bundled Nerd Font actually ships.
 function glyph(entry) {
-  if (!entry) return ""
-  if (entry.kind === "steam") return ""
+  if (!entry) return ""
+  if (entry.kind === "steam") return "󰒷"
   if (entry.icon) return entry.icon
-  if (entry.source === "itch") return ""
-  return "󰄌"
+  if (entry.source === "itch") return "󰊗"
+  return "󰇧"
 }
 
 // Subsequence match with the forgiving behaviour of a fuzzy file finder:
