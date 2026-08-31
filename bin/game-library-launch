@@ -1,0 +1,56 @@
+#!/bin/bash
+#
+# Launch one entry from the game library.
+#
+#   game-library-launch steam <appid>
+#   game-library-launch web <url> [--tab]
+#   game-library-launch steam-client
+#
+# Kept out of the QML so the launch path stays scriptable and debuggable from
+# a terminal, and so web games go through the same omarchy-launch-webapp that
+# every other Omarchy web app uses.
+
+set -euo pipefail
+
+usage() {
+  echo "Usage: game-library-launch <steam|web|steam-client> [args...]" >&2
+  exit 1
+}
+
+(($# >= 1)) || usage
+mode="$1"
+shift
+
+case "$mode" in
+steam)
+  (($# >= 1)) || usage
+  appid="$1"
+  [[ $appid =~ ^[0-9]+$ ]] || {
+    echo "Not an appid: $appid" >&2
+    exit 1
+  }
+  # rungameid handles shortcuts and non-Steam apps too, unlike -applaunch.
+  exec setsid uwsm-app -- steam "steam://rungameid/$appid" >/dev/null 2>&1
+  ;;
+steam-client)
+  exec setsid uwsm-app -- steam >/dev/null 2>&1
+  ;;
+web)
+  (($# >= 1)) || usage
+  url="$1"
+  shift
+  [[ $url =~ ^https?:// ]] || {
+    echo "Not an http(s) url: $url" >&2
+    exit 1
+  }
+  # A curated launcher earns its own chromeless window; a one-off scraped game
+  # is better as a normal tab, so it keeps history and the back button.
+  if [[ ${1:-} == "--tab" ]]; then
+    exec omarchy-launch-browser "$url"
+  fi
+  exec omarchy-launch-webapp "$url"
+  ;;
+*)
+  usage
+  ;;
+esac

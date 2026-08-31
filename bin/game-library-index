@@ -1,0 +1,700 @@
+#!/usr/bin/env python3
+"""Index the user's playable games and print them as JSON.
+
+Two sources, deliberately kept independent so a network hiccup in one never
+blocks the other:
+
+  steam  Entirely local. Owned apps come from Steam's own on-disk caches --
+         appinfo.vdf for names, librarycache/ for artwork, localconfig.vdf
+         for playtime, appmanifest_*.acf for what is actually installed.
+         No API key, no account, works offline.
+
+  web    A curated catalog shipped with the plugin, the user's own additions
+         from ~/.config/omarchy/extensions/game-library.jsonc, and a cached
+         scrape of itch.io's browser-playable listings.
+
+Output is a single JSON object on stdout. Failures degrade to partial results
+with an entry in "errors" rather than a non-zero exit -- a panel that shows
+Steam but not itch.io is far better than a panel that shows nothing.
+"""
+
+import argparse
+import json
+import os
+import re
+import hashlib
+import html
+import struct
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+HOME = os.path.expanduser("~")
+CACHE_DIR = os.path.join(
+    os.environ.get("XDG_CACHE_HOME", os.path.join(HOME, ".cache")),
+    "omarchy-game-library",
+)
+PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+USER_CATALOG = os.path.join(HOME, ".config", "omarchy", "extensions", "game-library.jsonc")
+
+STEAM_ROOTS = [
+    os.path.join(HOME, ".local", "share", "Steam"),
+    os.path.join(HOME, ".steam", "steam"),
+    os.path.join(HOME, ".steam", "root"),
+    os.path.join(HOME, ".var", "app", "com.valvesoftware.Steam", "data", "Steam"),
+]
+
+# Artwork Steam caches per app, best-looking first. library_600x900 is the
+# vertical capsule; header is the 460x215 landscape; logo is transparent art.
+COVER_NAMES = [
+    "library_600x900.jpg",
+    "library_600x900_2x.jpg",
+    "library_capsule.jpg",
+    "header.jpg",
+    "library_header.jpg",
+    "logo.png",
+]
+
+# App types worth listing. Steam's caches are full of runtimes, redistributables
+# and soundtracks that nobody wants to see in a game launcher.
+PLAYABLE_TYPES = {"game", "mod", "demo", "beta", "application"}
+
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) omarchy-game-library"
+
+
+# --------------------------------------------------------------------------
+# binary VDF (appinfo.vdf) -- appid -> name/type, fully offline
+# --------------------------------------------------------------------------
+
+APPINFO_MAGICS = (0x07564427, 0x07564428, 0x07564429)
+
+
+def _appinfo_string_table(blob, magic):
+    """v29 moved every key name into one pooled table at the end of the file."""
+    if magic != 0x07564429:
+        return None
+    offset = struct.unpack_from("<q", blob, 8)[0]
+    count = struct.unpack_from("<I", blob, offset)[0]
+    pos = offset + 4
+    table = []
+    for _ in range(count):
+        end = blob.index(b"\x00", pos)
+        table.append(blob[pos:end].decode("utf8", "replace"))
+        pos = end + 1
+    return table
+
+
+def _read_key(blob, pos, table):
+    if table is not None:
+        return table[struct.unpack_from("<I", blob, pos)[0]], pos + 4
+    end = blob.index(b"\x00", pos)
+    return blob[pos:end].decode("utf8", "replace"), end + 1
+
+
+def _read_dict(blob, pos, table):
+    out = {}
+    while True:
+        kind = blob[pos]
+        pos += 1
+        if kind == 0x08:          # end of dict
+            return out, pos
+        key, pos = _read_key(blob, pos, table)
+        if kind == 0x00:          # nested dict
+            out[key], pos = _read_dict(blob, pos, table)
+        elif kind == 0x01:        # string
+            end = blob.index(b"\x00", pos)
+            out[key] = blob[pos:end].decode("utf8", "replace")
+            pos = end + 1
+        elif kind == 0x02:        # int32
+            out[key] = struct.unpack_from("<i", blob, pos)[0]
+            pos += 4
+        elif kind == 0x07:        # uint64
+            out[key] = struct.unpack_from("<Q", blob, pos)[0]
+            pos += 8
+        else:
+            raise ValueError("unknown VDF type %d" % kind)
+
+
+def parse_appinfo(path):
+    """Map appid -> {name, type} from Steam's binary appinfo cache."""
+    try:
+        with open(path, "rb") as handle:
+            blob = handle.read()
+    except OSError:
+        return {}
+    if len(blob) < 16:
+        return {}
+    magic = struct.unpack_from("<I", blob, 0)[0]
+    if magic not in APPINFO_MAGICS:
+        return {}
+    table = _appinfo_string_table(blob, magic)
+    pos = 16 if magic == 0x07564429 else 8
+    # Per-app header: infoState, lastUpdated, picsToken, sha1(text),
+    # changeNumber, and since v28 a second sha1 over the binary payload.
+    header = 4 + 4 + 8 + 20 + 4 + (20 if magic >= 0x07564428 else 0)
+    out = {}
+    while pos + 8 <= len(blob):
+        appid, size = struct.unpack_from("<II", blob, pos)
+        if appid == 0:
+            break
+        try:
+            parsed, _ = _read_dict(blob, pos + 8 + header, table)
+            common = (parsed.get("appinfo") or parsed).get("common") or {}
+            name = common.get("name")
+            if name:
+                out[appid] = {
+                    "name": name,
+                    "type": str(common.get("type", "")).lower(),
+                }
+        except (ValueError, IndexError, struct.error):
+            pass  # one malformed app must not sink the rest of the file
+        pos += 8 + size
+    return out
+
+
+# --------------------------------------------------------------------------
+# text VDF (libraryfolders, appmanifest, localconfig, loginusers)
+# --------------------------------------------------------------------------
+
+_KV = re.compile(r'"((?:[^"\\]|\\.)*)"\s*"((?:[^"\\]|\\.)*)"')
+
+
+def parse_text_vdf(text):
+    """Parse Valve's text KeyValues into nested dicts.
+
+    Deliberately small: these files are machine-written, so a tokenizer over
+    quoted strings and braces covers every file we read.
+    """
+    stack = [{}]
+    key_stack = []
+    pos, length = 0, len(text)
+    while pos < length:
+        char = text[pos]
+        if char in " \t\r\n":
+            pos += 1
+            continue
+        if char == "/" and text.startswith("//", pos):
+            newline = text.find("\n", pos)
+            pos = length if newline == -1 else newline + 1
+            continue
+        if char == "{":
+            stack.append({})
+            pos += 1
+            continue
+        if char == "}":
+            done = stack.pop()
+            if key_stack and stack:
+                stack[-1][key_stack.pop()] = done
+            pos += 1
+            continue
+        if char == '"':
+            match = _KV.match(text, pos)
+            if match:
+                stack[-1][match.group(1)] = match.group(2)
+                pos = match.end()
+                continue
+            end = pos + 1
+            while end < length:
+                if text[end] == "\\":
+                    end += 2
+                    continue
+                if text[end] == '"':
+                    break
+                end += 1
+            key_stack.append(text[pos + 1:end])
+            pos = end + 1
+            continue
+        pos += 1
+    return stack[0]
+
+
+def read_vdf_file(path):
+    try:
+        with open(path, "r", encoding="utf8", errors="replace") as handle:
+            return parse_text_vdf(handle.read())
+    except OSError:
+        return {}
+
+
+def to_int(value, default=0):
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+# --------------------------------------------------------------------------
+# Steam
+# --------------------------------------------------------------------------
+
+def find_steam_root():
+    for root in STEAM_ROOTS:
+        if os.path.isdir(os.path.join(root, "steamapps")):
+            return os.path.realpath(root)
+    return ""
+
+
+def library_dirs(root):
+    """Every steamapps/ directory Steam knows about, including extra drives."""
+    dirs = [os.path.join(root, "steamapps")]
+    folders = read_vdf_file(os.path.join(root, "steamapps", "libraryfolders.vdf"))
+    for entry in (folders.get("libraryfolders") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        if path:
+            candidate = os.path.join(path, "steamapps")
+            if os.path.isdir(candidate) and candidate not in dirs:
+                dirs.append(candidate)
+    return dirs
+
+
+def installed_apps(root):
+    """appid -> install facts, straight from the appmanifest ACF files."""
+    out = {}
+    for directory in library_dirs(root):
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        for filename in names:
+            if not (filename.startswith("appmanifest_") and filename.endswith(".acf")):
+                continue
+            state = read_vdf_file(os.path.join(directory, filename)).get("AppState") or {}
+            appid = to_int(state.get("appid"))
+            if not appid:
+                continue
+            out[appid] = {
+                "name": state.get("name") or "",
+                "sizeBytes": to_int(state.get("SizeOnDisk")),
+                "lastPlayed": to_int(state.get("LastPlayed")),
+                "installDir": state.get("installdir") or "",
+            }
+    return out
+
+
+def active_user(root):
+    """The most recently used account, for playtime lookup and profile links."""
+    users = (read_vdf_file(os.path.join(root, "config", "loginusers.vdf")).get("users") or {})
+    best, best_stamp = None, -1
+    for steam_id, info in users.items():
+        if not isinstance(info, dict):
+            continue
+        stamp = to_int(info.get("Timestamp"))
+        if info.get("MostRecent") == "1":
+            stamp += 1 << 40
+        if stamp > best_stamp:
+            best, best_stamp = (steam_id, info), stamp
+    if not best:
+        return {}
+    steam_id, info = best
+    return {
+        "steamId": steam_id,
+        "accountName": info.get("AccountName") or "",
+        "personaName": info.get("PersonaName") or "",
+        # userdata/ is keyed by the 32-bit account id, not the 64-bit steamid.
+        "accountId": to_int(steam_id) - 76561197960265728 if steam_id.isdigit() else 0,
+    }
+
+
+def local_playtime(root, account_id):
+    """appid -> {playtimeMin, lastPlayed} from the logged-in user's localconfig."""
+    if not account_id:
+        return {}
+    path = os.path.join(root, "userdata", str(account_id), "config", "localconfig.vdf")
+    config = read_vdf_file(path)
+    node = config.get("UserLocalConfigStore") or config
+    apps = ((node.get("Software") or {}).get("Valve") or {}).get("Steam") or {}
+    apps = apps.get("apps") or apps.get("Apps") or {}
+    out = {}
+    for key, value in apps.items():
+        appid = to_int(key)
+        if not appid or not isinstance(value, dict):
+            continue
+        out[appid] = {
+            "playtimeMin": to_int(value.get("Playtime")),
+            "lastPlayed": to_int(value.get("LastPlayed")),
+        }
+    return out
+
+
+def artwork_index(root):
+    """appid -> local cover path, using whichever art Steam has cached."""
+    cache = os.path.join(root, "appcache", "librarycache")
+    out = {}
+    try:
+        entries = os.listdir(cache)
+    except OSError:
+        return out
+    for entry in entries:
+        directory = os.path.join(cache, entry)
+        if entry.isdigit() and os.path.isdir(directory):
+            for name in COVER_NAMES:
+                candidate = os.path.join(directory, name)
+                if os.path.isfile(candidate):
+                    out[int(entry)] = candidate
+                    break
+            else:
+                # Newer Steam builds drop content-hashed filenames in here with
+                # no stable name. Any image beats falling back to the network.
+                images = sorted(
+                    f for f in os.listdir(directory)
+                    if f.lower().endswith((".jpg", ".png"))
+                )
+                if images:
+                    out[int(entry)] = os.path.join(directory, images[0])
+        elif os.path.isfile(directory):
+            # Older Steam builds flattened art as <appid>_library_600x900.jpg
+            match = re.match(r"^(\d+)_(library_600x900|header|library_header)\.jpg$", entry)
+            if match:
+                out.setdefault(int(match.group(1)), directory)
+    return out
+
+
+def fetch_owned_via_api(api_key, steam_id, timeout):
+    """Authoritative owned list. Only used when the user supplies an API key."""
+    url = (
+        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
+        "?key=%s&steamid=%s&include_appinfo=1&include_played_free_games=1&format=json"
+        % (urllib.parse.quote(api_key), urllib.parse.quote(steam_id))
+    )
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.load(response)
+    games = (payload.get("response") or {}).get("games") or []
+    return {
+        to_int(game.get("appid")): {
+            "name": game.get("name") or "",
+            "playtimeMin": to_int(game.get("playtime_forever")),
+            "lastPlayed": to_int(game.get("rtime_last_played")),
+        }
+        for game in games
+        if to_int(game.get("appid"))
+    }
+
+
+def collect_steam(args):
+    root = find_steam_root()
+    if not root:
+        return {
+            "available": False,
+            "reason": "No Steam installation found.",
+            "games": [],
+            "installedCount": 0,
+            "ownedCount": 0,
+        }
+
+    names = parse_appinfo(os.path.join(root, "appcache", "appinfo.vdf"))
+    installed = installed_apps(root)
+    art = artwork_index(root)
+    user = active_user(root)
+    playtime = local_playtime(root, user.get("accountId", 0))
+
+    source = "local"
+    api_owned = {}
+    errors = []
+    if args.api_key and user.get("steamId"):
+        try:
+            api_owned = fetch_owned_via_api(args.api_key, user["steamId"], args.timeout)
+            source = "web-api"
+        except (urllib.error.URLError, ValueError, OSError) as exc:
+            errors.append("Steam Web API: %s" % exc)
+
+    # An app is "owned" if any local cache knows about it. Installed games and
+    # the API list always win; artwork and playtime caches fill in the rest.
+    appids = set(installed) | set(art) | set(playtime) | set(api_owned)
+
+    games = []
+    for appid in appids:
+        meta = names.get(appid) or {}
+        api_meta = api_owned.get(appid) or {}
+        install = installed.get(appid) or {}
+        play = playtime.get(appid) or {}
+
+        name = install.get("name") or api_meta.get("name") or meta.get("name") or ""
+        if not name:
+            continue  # an appid with no name anywhere is cache debris
+
+        app_type = meta.get("type", "")
+        if not args.include_tools and app_type and app_type not in PLAYABLE_TYPES:
+            continue
+        # Runtimes and Proton builds are installed but are not games.
+        if not args.include_tools and re.search(
+            r"^(Steam Linux Runtime|Proton |Steamworks Common)", name
+        ):
+            continue
+
+        cover = art.get(appid, "")
+        games.append({
+            "appid": appid,
+            "name": name,
+            "kind": "steam",
+            "installed": appid in installed,
+            "sizeBytes": install.get("sizeBytes", 0),
+            "playtimeMin": api_meta.get("playtimeMin") or play.get("playtimeMin", 0),
+            "lastPlayed": max(
+                install.get("lastPlayed", 0),
+                play.get("lastPlayed", 0),
+                api_meta.get("lastPlayed", 0),
+            ),
+            "cover": cover,
+            "coverUrl": "" if cover else
+                "https://cdn.cloudflare.steamstatic.com/steam/apps/%d/library_600x900.jpg" % appid,
+        })
+
+    # Recently played first, then everything else alphabetically -- the panel
+    # shows a "recent" section off the top of this same list.
+    games.sort(key=lambda g: (-g["lastPlayed"], g["name"].lower()))
+
+    return {
+        "available": True,
+        "steamRoot": root,
+        "source": source,
+        "account": user.get("personaName") or user.get("accountName", ""),
+        "steamId": user.get("steamId", ""),
+        "installedCount": sum(1 for g in games if g["installed"]),
+        "ownedCount": len(games),
+        "games": games,
+        "errors": errors,
+    }
+
+
+# --------------------------------------------------------------------------
+# Web games
+# --------------------------------------------------------------------------
+
+def strip_jsonc(text):
+    """Remove // and /* */ comments and trailing commas, respecting strings."""
+    out = []
+    pos, length = 0, len(text)
+    while pos < length:
+        char = text[pos]
+        if char == '"':
+            end = pos + 1
+            while end < length:
+                if text[end] == "\\":
+                    end += 2
+                    continue
+                if text[end] == '"':
+                    break
+                end += 1
+            out.append(text[pos:end + 1])
+            pos = end + 1
+            continue
+        if text.startswith("//", pos):
+            newline = text.find("\n", pos)
+            pos = length if newline == -1 else newline
+            continue
+        if text.startswith("/*", pos):
+            close = text.find("*/", pos + 2)
+            pos = length if close == -1 else close + 2
+            continue
+        out.append(char)
+        pos += 1
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
+def load_json_list(path):
+    try:
+        with open(path, "r", encoding="utf8") as handle:
+            data = json.loads(strip_jsonc(handle.read()))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict):
+        data = data.get("games") or data.get("entries") or []
+    return data if isinstance(data, list) else []
+
+
+def normalize_web(entry, source):
+    url = str(entry.get("url") or "").strip()
+    name = str(entry.get("name") or entry.get("title") or "").strip()
+    if not url.startswith(("http://", "https://")) or not name:
+        return None
+    return {
+        "id": str(entry.get("id") or "%s-%s" % (source, hashlib.sha1(url.encode()).hexdigest()[:10])),
+        "name": name,
+        "url": url,
+        "kind": "web",
+        "source": source,
+        "category": str(entry.get("category") or entry.get("genre") or ""),
+        "author": str(entry.get("author") or ""),
+        "description": str(entry.get("description") or ""),
+        "icon": str(entry.get("icon") or ""),
+        "thumb": str(entry.get("thumb") or ""),
+        # Curated launchers open as a standalone web app; scraped one-off games
+        # are better off in a normal tab.
+        "webapp": bool(entry.get("webapp", source == "catalog")),
+    }
+
+
+ITCH_CELL = re.compile(r'<div data-game_id="(\d+)".*?(?=<div data-game_id="|\Z)', re.S)
+ITCH_TITLE = re.compile(r'class="title game_link"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+ITCH_THUMB = re.compile(r'data-lazy_src="([^"]+)"')
+ITCH_AUTHOR = re.compile(r'class="game_author"><a[^>]*>(.*?)</a>', re.S)
+ITCH_GENRE = re.compile(r'class="game_genre">(.*?)</div>', re.S)
+ITCH_TEXT = re.compile(r'class="game_text">(.*?)</div>', re.S)
+
+
+def untag(value):
+    """Strip tags, decode entities, collapse whitespace."""
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", value or ""))).strip()
+
+
+def scrape_itch(limit, timeout):
+    """Parse itch.io's browser-playable grid.
+
+    Scraping is inherently brittle, so every field is optional and a parse
+    that yields nothing is reported as an error rather than an empty library.
+    """
+    url = "https://itch.io/games/html5"
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        html = response.read().decode("utf8", "replace")
+
+    games = []
+    for cell in ITCH_CELL.finditer(html):
+        block = cell.group(0)
+        title = ITCH_TITLE.search(block)
+        if not title:
+            continue
+        thumb = ITCH_THUMB.search(block)
+        author = ITCH_AUTHOR.search(block)
+        genre = ITCH_GENRE.search(block)
+        text = ITCH_TEXT.search(block)
+        games.append({
+            "id": "itch-%s" % cell.group(1),
+            "name": untag(title.group(2)),
+            "url": title.group(1),
+            "thumb": thumb.group(1) if thumb else "",
+            "author": untag(author.group(1)) if author else "",
+            "category": untag(genre.group(1)) if genre else "",
+            "description": untag(text.group(1)) if text else "",
+            "webapp": False,
+        })
+        if len(games) >= limit:
+            break
+    if not games:
+        raise ValueError("itch.io markup returned no games")
+    return games
+
+
+def cached_itch(limit, ttl, timeout, force):
+    """Scrape at most once per TTL; serve the cache the rest of the time."""
+    path = os.path.join(CACHE_DIR, "itch.json")
+    cached = None
+    try:
+        with open(path, "r", encoding="utf8") as handle:
+            cached = json.load(handle)
+    except (OSError, ValueError):
+        cached = None
+
+    fresh = cached and (time.time() - cached.get("fetchedAt", 0)) < ttl
+    if fresh and not force:
+        return cached.get("games", [])[:limit], ""
+
+    try:
+        games = scrape_itch(limit, timeout)
+    except (urllib.error.URLError, ValueError, OSError) as exc:
+        if cached:
+            return cached.get("games", [])[:limit], "itch.io refresh failed (showing cache): %s" % exc
+        return [], "itch.io: %s" % exc
+
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf8") as handle:
+            json.dump({"fetchedAt": time.time(), "games": games}, handle)
+    except OSError:
+        pass  # a read-only cache dir is not worth failing the whole index over
+    return games, ""
+
+
+def collect_web(args):
+    errors = []
+    entries = []
+
+    catalog = []
+    if not args.no_catalog:
+        catalog = load_json_list(os.path.join(PLUGIN_DIR, "catalog.json"))
+    user = load_json_list(USER_CATALOG)
+
+    for entry in catalog:
+        normalized = normalize_web(entry, "catalog")
+        if normalized:
+            entries.append(normalized)
+    for entry in user:
+        normalized = normalize_web(entry, "user")
+        if normalized:
+            entries.append(normalized)
+
+    itch_games = []
+    if args.itch_limit > 0:
+        raw, error = cached_itch(args.itch_limit, args.itch_ttl, args.timeout, args.refresh_itch)
+        if error:
+            errors.append(error)
+        for entry in raw:
+            normalized = normalize_web(entry, "itch")
+            if normalized:
+                itch_games.append(normalized)
+
+    # User entries override a catalog entry pointing at the same URL.
+    seen = {}
+    for entry in entries + itch_games:
+        seen[entry["url"]] = entry
+
+    ordered = [e for e in entries if seen.get(e["url"]) is e]
+    ordered += [e for e in itch_games if seen.get(e["url"]) is e]
+
+    return {
+        "games": ordered,
+        "catalogCount": sum(1 for e in ordered if e["source"] == "catalog"),
+        "userCount": sum(1 for e in ordered if e["source"] == "user"),
+        "itchCount": sum(1 for e in ordered if e["source"] == "itch"),
+        "userCatalogPath": USER_CATALOG,
+        "errors": errors,
+    }
+
+
+# --------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Index Steam and web games as JSON.")
+    parser.add_argument("--section", choices=["all", "steam", "web"], default="all")
+    parser.add_argument("--itch-limit", type=int, default=24,
+                        help="max itch.io games to include (0 disables the scrape)")
+    parser.add_argument("--itch-ttl", type=int, default=21600,
+                        help="seconds before the itch.io cache is refetched")
+    parser.add_argument("--timeout", type=float, default=12.0)
+    parser.add_argument("--api-key", default="", help="optional Steam Web API key")
+    parser.add_argument("--include-tools", action="store_true",
+                        help="also list runtimes, Proton builds and other non-games")
+    parser.add_argument("--no-catalog", action="store_true",
+                        help="skip the bundled catalog, use only your own entries")
+    parser.add_argument("--refresh-itch", action="store_true",
+                        help="bypass the itch.io cache TTL")
+    args = parser.parse_args()
+
+    result = {"ok": True, "generatedAt": int(time.time()), "errors": []}
+    if args.section in ("all", "steam"):
+        try:
+            result["steam"] = collect_steam(args)
+            result["errors"].extend(result["steam"].pop("errors", []))
+        except Exception as exc:  # noqa: BLE001 - never let one source kill the panel
+            result["steam"] = {"available": False, "reason": str(exc), "games": [],
+                               "installedCount": 0, "ownedCount": 0}
+            result["errors"].append("Steam: %s" % exc)
+    if args.section in ("all", "web"):
+        try:
+            result["web"] = collect_web(args)
+            result["errors"].extend(result["web"].pop("errors", []))
+        except Exception as exc:  # noqa: BLE001
+            result["web"] = {"games": [], "catalogCount": 0, "userCount": 0, "itchCount": 0}
+            result["errors"].append("Web: %s" % exc)
+
+    json.dump(result, sys.stdout)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

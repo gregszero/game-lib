@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "id": "greg.game-library",
+  "name": "Game Library",
+  "version": "1.0.0",
+  "author": "Gregory Medici",
+  "license": "MIT",
+  "description": "Your Steam library and browser-playable games in one Omarchy bar panel. Steam data is read from local caches, so it works offline and needs no API key.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Games",
+    "description": "Search and launch Steam games, cloud-gaming services, and browser games without leaving the bar.",
+    "category": "Games",
+    "aliases": ["games", "steam", "library"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "recentCount": 5,
+      "showWeb": true,
+      "itchLimit": 24,
+      "includeTools": false,
+      "showCovers": true,
+      "steamApiKey": ""
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "recentCount",
+        "type": "integer",
+        "label": "Recently played shown",
+        "min": 0,
+        "max": 15,
+        "step": 1,
+        "defaultValue": 5,
+        "description": "How many recently played games to pin above the full library."
+      },
+      {
+        "key": "showWeb",
+        "type": "boolean",
+        "label": "Show web games",
+        "defaultValue": true,
+        "description": "Include cloud gaming, the curated catalogue, and itch.io."
+      },
+      {
+        "key": "itchLimit",
+        "type": "integer",
+        "label": "itch.io games indexed",
+        "min": 0,
+        "max": 60,
+        "step": 4,
+        "defaultValue": 24,
+        "description": "Browser-playable games pulled from itch.io. Set to 0 to skip the scrape entirely."
+      },
+      {
+        "key": "showCovers",
+        "type": "boolean",
+        "label": "Show cover art",
+        "defaultValue": true,
+        "description": "Use Steam's cached box art in the list. Turn off for a plain text list."
+      },
+      {
+        "key": "includeTools",
+        "type": "boolean",
+        "label": "Include tools and runtimes",
+        "defaultValue": false,
+        "description": "Also list Proton builds, Steam runtimes, and other non-games."
+      },
+      {
+        "key": "steamApiKey",
+        "type": "string",
+        "label": "Steam Web API key (optional)",
+        "defaultValue": "",
+        "description": "Only needed to list games you own but have never installed or launched on this machine. Get one at steamcommunity.com/dev/apikey."
+      }
+    ]
+  }
+}

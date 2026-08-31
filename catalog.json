@@ -1,0 +1,114 @@
+[
+  {
+    "name": "itch.io",
+    "url": "https://itch.io/games/html5",
+    "category": "Store",
+    "description": "Thousands of browser-playable indie games",
+    "icon": "󰊗",
+    "webapp": true
+  },
+  {
+    "name": "Xbox Cloud Gaming",
+    "url": "https://www.xbox.com/play",
+    "category": "Cloud",
+    "description": "Stream Game Pass titles in the browser",
+    "icon": "󰊴",
+    "webapp": true
+  },
+  {
+    "name": "GeForce NOW",
+    "url": "https://play.geforcenow.com",
+    "category": "Cloud",
+    "description": "Stream your own PC library from NVIDIA",
+    "icon": "󰢮",
+    "webapp": true
+  },
+  {
+    "name": "Amazon Luna",
+    "url": "https://luna.amazon.com",
+    "category": "Cloud",
+    "description": "Amazon's cloud gaming service",
+    "icon": "󰅶",
+    "webapp": true
+  },
+  {
+    "name": "Poki",
+    "url": "https://poki.com",
+    "category": "Arcade",
+    "description": "Instant-play casual games",
+    "icon": "󰮂",
+    "webapp": true
+  },
+  {
+    "name": "CrazyGames",
+    "url": "https://www.crazygames.com",
+    "category": "Arcade",
+    "description": "Browser games, no install",
+    "icon": "󰊗",
+    "webapp": true
+  },
+  {
+    "name": "Neal.fun",
+    "url": "https://neal.fun",
+    "category": "Toys",
+    "description": "Interactive oddities and small games",
+    "icon": "󰝤",
+    "webapp": true
+  },
+  {
+    "name": "Chess.com",
+    "url": "https://www.chess.com/play",
+    "category": "Board",
+    "description": "Play chess online",
+    "icon": "󰘙",
+    "webapp": true
+  },
+  {
+    "name": "Lichess",
+    "url": "https://lichess.org",
+    "category": "Board",
+    "description": "Free open-source chess server",
+    "icon": "󰡘",
+    "webapp": true
+  },
+  {
+    "name": "NYT Games",
+    "url": "https://www.nytimes.com/crosswords",
+    "category": "Puzzle",
+    "description": "Wordle, Connections, the Crossword",
+    "icon": "󰬴",
+    "webapp": true
+  },
+  {
+    "name": "Internet Archive Arcade",
+    "url": "https://archive.org/details/internetarcade",
+    "category": "Retro",
+    "description": "Emulated arcade cabinets in the browser",
+    "icon": "󰊗",
+    "webapp": true
+  },
+  {
+    "name": "Slither.io",
+    "url": "https://slither.io",
+    "category": "Arcade",
+    "description": "Multiplayer snake",
+    "icon": "󰆧",
+    "webapp": true
+  },
+  {
+    "name": "Gartic Phone",
+    "url": "https://garticphone.com",
+    "category": "Party",
+    "description": "Drawing telephone with friends",
+    "icon": "󰏘",
+    "webapp": true
+  },
+  {
+    "name": "skribbl.io",
+    "url": "https://skribbl.io",
+    "category": "Party",
+    "description": "Draw and guess with friends",
+    "icon": "󰏘",
+    "webapp": true
+  }
+]
