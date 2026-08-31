@@ -1,4 +1,4 @@
-# Game Library — an Omarchy shell plugin
+# Game Lib — an Omarchy shell plugin
 
 One bar icon that opens your whole playable library: every Steam game you own,
 plus cloud-gaming services and browser games that open the same way Omarchy
@@ -48,7 +48,7 @@ Three sources, merged:
 
 1. **A curated catalogue** (`catalog.json`) — itch.io, Xbox Cloud, GeForce NOW,
    Amazon Luna, Poki, CrazyGames, Lichess, the Internet Archive arcade, and more.
-2. **Your own entries** in `~/.config/omarchy/extensions/game-library.jsonc`.
+2. **Your own entries** in `~/.config/omarchy/extensions/game-lib.jsonc`.
 3. **itch.io's browser-playable listings**, from their RSS feed, cached for six
    hours. If the feed is ever unavailable the indexer falls back to parsing the
    browse page, and to the last good cache after that.
@@ -59,7 +59,7 @@ one-off scraped games open in a normal tab so history and the back button work.
 ### Adding your own
 
 ```jsonc
-// ~/.config/omarchy/extensions/game-library.jsonc
+// ~/.config/omarchy/extensions/game-lib.jsonc
 [
   {
     "name": "My Favourite Browser Game",
@@ -73,15 +73,15 @@ one-off scraped games open in a normal tab so history and the back button work.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-game-library.git --enable --yes
+omarchy plugin add https://github.com/gregszero/game-lib.git --enable --yes
 ```
 
 Or from a local checkout:
 
 ```bash
-ln -s ~/Developer/omarchy-game-library ~/.config/omarchy/plugins/greg.game-library
+ln -s ~/Developer/game-lib ~/.config/omarchy/plugins/greg.game-lib
 omarchy-shell shell rescanPlugins
-omarchy plugin enable greg.game-library
+omarchy plugin enable greg.game-lib
 ```
 
 ## Using it
@@ -115,10 +115,10 @@ Every option lives on the widget's entry in `~/.config/omarchy/shell.json`:
 Both are ordinary CLIs, so you can debug the plugin without the shell:
 
 ```bash
-./bin/game-library-index --section steam | jq '.steam.ownedCount'
-./bin/game-library-index --section web --refresh-itch | jq '.web.itchCount'
-./bin/game-library-launch steam 730
-./bin/game-library-launch web https://lichess.org
+./bin/game-lib-index --section steam | jq '.steam.ownedCount'
+./bin/game-lib-index --section web --refresh-itch | jq '.web.itchCount'
+./bin/game-lib-launch steam 730
+./bin/game-lib-launch web https://lichess.org
 ```
 
 ## License

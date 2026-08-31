@@ -9,8 +9,8 @@ import "Model.js" as Model
 
 Panel {
   id: panelRoot
-  moduleName: "greg.game-library"
-  ipcTarget: "game-library"
+  moduleName: "greg.game-lib"
+  ipcTarget: "game-lib"
   manageIpc: false
 
   // The rendered list is one flat array of {header} and {entry} rows so the

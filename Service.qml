@@ -4,7 +4,7 @@ import Quickshell.Io
 import "Model.js" as Model
 
 // Owns every piece of state the panel renders. The heavy lifting happens in
-// bin/game-library-index, a standalone script, so the shell only ever parses
+// bin/game-lib-index, a standalone script, so the shell only ever parses
 // one JSON blob and never blocks on disk or network work itself.
 Item {
   id: root
@@ -40,8 +40,8 @@ Item {
   readonly property bool includeTools: setting("includeTools", false) === true
   readonly property string steamApiKey: String(setting("steamApiKey", ""))
 
-  readonly property string indexerPath: pluginDir === "" ? "" : pluginDir + "/bin/game-library-index"
-  readonly property string launcherPath: pluginDir === "" ? "" : pluginDir + "/bin/game-library-launch"
+  readonly property string indexerPath: pluginDir === "" ? "" : pluginDir + "/bin/game-lib-index"
+  readonly property string launcherPath: pluginDir === "" ? "" : pluginDir + "/bin/game-lib-launch"
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined

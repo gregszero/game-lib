@@ -2,9 +2,9 @@
 #
 # Launch one entry from the game library.
 #
-#   game-library-launch steam <appid>
-#   game-library-launch web <url> [--tab]
-#   game-library-launch steam-client
+#   game-lib-launch steam <appid>
+#   game-lib-launch web <url> [--tab]
+#   game-lib-launch steam-client
 #
 # Kept out of the QML so the launch path stays scriptable and debuggable from
 # a terminal, and so web games go through the same omarchy-launch-webapp that
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: game-library-launch <steam|web|steam-client> [args...]" >&2
+  echo "Usage: game-lib-launch <steam|web|steam-client> [args...]" >&2
   exit 1
 }
 

@@ -10,7 +10,7 @@ blocks the other:
          No API key, no account, works offline.
 
   web    A curated catalog shipped with the plugin, the user's own additions
-         from ~/.config/omarchy/extensions/game-library.jsonc, and a cached
+         from ~/.config/omarchy/extensions/game-lib.jsonc, and a cached
          scrape of itch.io's browser-playable listings.
 
 Output is a single JSON object on stdout. Failures degrade to partial results
@@ -34,10 +34,10 @@ import urllib.request
 HOME = os.path.expanduser("~")
 CACHE_DIR = os.path.join(
     os.environ.get("XDG_CACHE_HOME", os.path.join(HOME, ".cache")),
-    "omarchy-game-library",
+    "omarchy-game-lib",
 )
 PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-USER_CATALOG = os.path.join(HOME, ".config", "omarchy", "extensions", "game-library.jsonc")
+USER_CATALOG = os.path.join(HOME, ".config", "omarchy", "extensions", "game-lib.jsonc")
 
 STEAM_ROOTS = [
     os.path.join(HOME, ".local", "share", "Steam"),
@@ -61,7 +61,7 @@ COVER_NAMES = [
 # and soundtracks that nobody wants to see in a game launcher.
 PLAYABLE_TYPES = {"game", "mod", "demo", "beta", "application"}
 
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) omarchy-game-library"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) omarchy-game-lib"
 
 
 # --------------------------------------------------------------------------

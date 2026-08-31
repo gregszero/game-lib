@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "greg.game-library",
-  "name": "Game Library",
+  "id": "greg.game-lib",
+  "name": "Game Lib",
   "version": "1.0.0",
   "author": "Gregory Medici",
   "license": "MIT",
@@ -16,7 +16,11 @@
     "displayName": "Games",
     "description": "Search and launch Steam games, cloud-gaming services, and browser games without leaving the bar.",
     "category": "Games",
-    "aliases": ["games", "steam", "library"],
+    "aliases": [
+      "games",
+      "steam",
+      "library"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
